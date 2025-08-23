@@ -1,0 +1,14 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "classes",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "isJoinable", "order": "ASCENDING" },
+        { "fieldPath": "uniqueCode", "order": "ASCENDING" },
+        { "fieldPath": "__name__", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

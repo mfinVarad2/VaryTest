@@ -30,7 +30,8 @@ function JoinClass({ db, userId, APP_ID, userProfile }) {
       const classesCollectionGroupRef = collectionGroup(db, 'classes');
       const q = query(
         classesCollectionGroupRef,
-        where("uniqueCode", "==", classCode.trim().toUpperCase())
+        where("uniqueCode", "==", classCode.trim().toUpperCase()),
+        where("isJoinable", "==", true)
       );
       const classSnapshot = await getDocs(q);
 

@@ -4,12 +4,71 @@ import React, { useState, useEffect, useRef } from 'react';
 import { collection, addDoc, doc, updateDoc } from 'firebase/firestore'; // add update for edit mode
 import { insertTextAtCursor } from '../utils/helpers'; // Import insertTextAtCursor
 
+// Function to safely evaluate mathematical expressions
+function evaluateFormula(formula, variables) {
+  try {
+    // Replace variable placeholders with their values
+    let processedFormula = formula;
+    variables.forEach(v => {
+      const varRegex = new RegExp(`\\b${v.name}\\b`, 'g');
+      // If variable has multiple values, we'd need to handle this differently
+      // For now, use the first non-empty value
+      const value = v.values.find(val => val.trim() !== '') || '0';
+      processedFormula = processedFormula.replace(varRegex, value);
+    });
+
+    // Handle trigonometric functions with degree inputs (convert to radians)
+    // sin(x) -> Math.sin(x * Math.PI / 180)
+    // Also handle square notation: sin²(x) -> Math.pow(Math.sin(x * Math.PI / 180), 2)
+    processedFormula = processedFormula.replace(/sin²\(([^)]+)\)/g, 'Math.pow(Math.sin($1 * Math.PI / 180), 2)');
+    processedFormula = processedFormula.replace(/cos²\(([^)]+)\)/g, 'Math.pow(Math.cos($1 * Math.PI / 180), 2)');
+    processedFormula = processedFormula.replace(/tan²\(([^)]+)\)/g, 'Math.pow(Math.tan($1 * Math.PI / 180), 2)');
+
+    processedFormula = processedFormula.replace(/sin\(([^)]+)\)/g, 'Math.sin($1 * Math.PI / 180)');
+    processedFormula = processedFormula.replace(/cos\(([^)]+)\)/g, 'Math.cos($1 * Math.PI / 180)');
+    processedFormula = processedFormula.replace(/tan\(([^)]+)\)/g, 'Math.tan($1 * Math.PI / 180)');
+
+    // Handle other trigonometric functions
+    processedFormula = processedFormula.replace(/cosec\(([^)]+)\)/g, '1/Math.sin($1 * Math.PI / 180)');
+    processedFormula = processedFormula.replace(/sec\(([^)]+)\)/g, '1/Math.cos($1 * Math.PI / 180)');
+    processedFormula = processedFormula.replace(/cot\(([^)]+)\)/g, '1/Math.tan($1 * Math.PI / 180)');
+
+    // Replace other mathematical operators
+    processedFormula = processedFormula.replace(/√/g, 'Math.sqrt');
+    processedFormula = processedFormula.replace(/π/g, 'Math.PI');
+    processedFormula = processedFormula.replace(/×/g, '*');
+    processedFormula = processedFormula.replace(/÷/g, '/');
+
+    // Evaluate the formula safely
+    // Note: In a production environment, you might want to use a more secure evaluation library
+    // than the built-in Function constructor
+    const result = new Function('return ' + processedFormula)();
+
+    return isNaN(result) ? 'undefined' : result;
+  } catch (error) {
+    console.error('Formula evaluation error:', error);
+    return 'undefined';
+  }
+}
+
 function DynamicQuestionForm({ db, userId, subjectId, onQuestionAdded, onQuestionUpdated, onCancel, APP_ID, editQuestion = null }) {
   const [questionText, setQuestionText] = useState('');
   const [variables, setVariables] = useState([]); // [{id: 'uuid', name: 'var_1', values: ['10', '20']}]
   const [formula, setFormula] = useState('');
   const [isAddingQuestion, setIsAddingQuestion] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [computedResult, setComputedResult] = useState('');
+
+  // Compute the result whenever formula or variables change
+  useEffect(() => {
+    if (formula.trim() === '') {
+      setComputedResult('');
+      return;
+    }
+
+    const result = evaluateFormula(formula, variables);
+    setComputedResult(result);
+  }, [formula, variables]);
   const nextVarIndex = useRef(1); // To keep track of the next 'var_X' to generate
 
   // Refs for managing cursor position in textareas/inputs
@@ -372,6 +431,16 @@ function DynamicQuestionForm({ db, userId, subjectId, onQuestionAdded, onQuestio
                 Use variables and operators/functions to build your formula.
               </p>
             </div>
+
+            {/* Display computed result */}
+            {computedResult !== '' && (
+              <div className="mt-4 p-3 bg-gray-100 rounded-md border border-gray-200">
+                <p className="text-sm font-medium text-gray-700 mb-1">Computed Result:</p>
+                <p className="text-lg font-bold text-indigo-700">
+                  {computedResult === 'undefined' ? 'Undefined (check formula)' : computedResult}
+                </p>
+              </div>
+            )}
 
             {/* Operator and Function Chips (to the right of formula input) */}
             <div className="flex flex-wrap gap-2 p-3 bg-gray-100 rounded-md border border-gray-200 sm:w-1/3 max-w-xs">

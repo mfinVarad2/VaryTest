@@ -11,39 +11,52 @@ function evaluateFormula(formula, variables) {
     let processedFormula = formula;
     variables.forEach(v => {
       const varRegex = new RegExp(`\\b${v.name}\\b`, 'g');
-      // If variable has multiple values, we'd need to handle this differently
-      // For now, use the first non-empty value
       const value = v.values.find(val => val.trim() !== '') || '0';
       processedFormula = processedFormula.replace(varRegex, value);
     });
 
-    // Handle trigonometric functions with degree inputs (convert to radians)
-    // sin(x) -> Math.sin(x * Math.PI / 180)
-    // Also handle square notation: sin²(x) -> Math.pow(Math.sin(x * Math.PI / 180), 2)
-    processedFormula = processedFormula.replace(/sin²\(([^)]+)\)/g, 'Math.pow(Math.sin($1 * Math.PI / 180), 2)');
-    processedFormula = processedFormula.replace(/cos²\(([^)]+)\)/g, 'Math.pow(Math.cos($1 * Math.PI / 180), 2)');
-    processedFormula = processedFormula.replace(/tan²\(([^)]+)\)/g, 'Math.pow(Math.tan($1 * Math.PI / 180), 2)');
-
-    processedFormula = processedFormula.replace(/sin\(([^)]+)\)/g, 'Math.sin($1 * Math.PI / 180)');
-    processedFormula = processedFormula.replace(/cos\(([^)]+)\)/g, 'Math.cos($1 * Math.PI / 180)');
-    processedFormula = processedFormula.replace(/tan\(([^)]+)\)/g, 'Math.tan($1 * Math.PI / 180)');
-
-    // Handle other trigonometric functions
-    processedFormula = processedFormula.replace(/cosec\(([^)]+)\)/g, '1/Math.sin($1 * Math.PI / 180)');
-    processedFormula = processedFormula.replace(/sec\(([^)]+)\)/g, '1/Math.cos($1 * Math.PI / 180)');
-    processedFormula = processedFormula.replace(/cot\(([^)]+)\)/g, '1/Math.tan($1 * Math.PI / 180)');
-
-    // Replace other mathematical operators
-    processedFormula = processedFormula.replace(/√/g, 'Math.sqrt');
+    // Casio 991 style: replace π with Math.PI
     processedFormula = processedFormula.replace(/π/g, 'Math.PI');
+    // Replace × and ÷
     processedFormula = processedFormula.replace(/×/g, '*');
     processedFormula = processedFormula.replace(/÷/g, '/');
 
-    // Evaluate the formula safely
-    // Note: In a production environment, you might want to use a more secure evaluation library
-    // than the built-in Function constructor
-    const result = new Function('return ' + processedFormula)();
+    // Replace square root: √x or √(x)
+    processedFormula = processedFormula.replace(/√\(([^)]+)\)/g, 'Math.sqrt($1)');
+    processedFormula = processedFormula.replace(/√([a-zA-Z0-9_.]+)/g, 'Math.sqrt($1)');
 
+    // Replace powers: x², x³, x⁴, ...
+    // Superscript unicode digits mapping
+    const superscriptMap = {
+      '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9'
+    };
+    // Replace x^y (caret)
+    processedFormula = processedFormula.replace(/([a-zA-Z0-9_.()]+)\^([a-zA-Z0-9_.()]+)/g, 'Math.pow($1, $2)');
+    // Replace x², x³, etc. (unicode)
+    processedFormula = processedFormula.replace(/([a-zA-Z0-9_.()]+)([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g, (match, base, supers) => {
+      let exp = '';
+      for (let ch of supers) exp += superscriptMap[ch] || '';
+      return `Math.pow(${base},${exp})`;
+    });
+
+    // Trig functions in degree mode, with optional power (e.g., sin(x)²)
+    // sin(x)², cos(x)², tan(x)²
+    processedFormula = processedFormula.replace(/(sin|cos|tan)\(([^)]+)\)\^([0-9]+)/g, (m, fn, arg, pow) => `Math.pow(Math.${fn}(((${arg}) * Math.PI / 180)),${pow})`);
+    processedFormula = processedFormula.replace(/(sin|cos|tan)\(([^)]+)\)([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g, (m, fn, arg, supers) => {
+      let exp = '';
+      for (let ch of supers) exp += superscriptMap[ch] || '';
+      return `Math.pow(Math.${fn}(((${arg}) * Math.PI / 180)),${exp})`;
+    });
+    // sin(x), cos(x), tan(x)
+    processedFormula = processedFormula.replace(/(sin|cos|tan)\(([^)]+)\)/g, (m, fn, arg) => `Math.${fn}(((${arg}) * Math.PI / 180))`);
+
+    // Cosec, sec, cot (Casio style)
+    processedFormula = processedFormula.replace(/cosec\(([^)]+)\)/g, '1/Math.sin(($1) * Math.PI / 180)');
+    processedFormula = processedFormula.replace(/sec\(([^)]+)\)/g, '1/Math.cos(($1) * Math.PI / 180)');
+    processedFormula = processedFormula.replace(/cot\(([^)]+)\)/g, '1/Math.tan(($1) * Math.PI / 180)');
+
+    // Evaluate the formula safely
+    const result = new Function('return ' + processedFormula)();
     return isNaN(result) ? 'undefined' : result;
   } catch (error) {
     console.error('Formula evaluation error:', error);

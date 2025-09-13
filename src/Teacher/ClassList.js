@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, onSnapshot, query, where, doc, getDocs, deleteDoc, updateDoc } from 'firebase/firestore';
-import { getCanvasAppId } from '../utils/helpers'; // Import getCanvasAppId
+// (removed) getCanvasAppId was unused
 
 function ClassList({ db, userId, APP_ID }) {
   const [classes, setClasses] = useState([]);
@@ -15,6 +15,8 @@ function ClassList({ db, userId, APP_ID }) {
   const [editedClassName, setEditedClassName] = useState('');
   const [editedLinkedSubjectId, setEditedLinkedSubjectId] = useState('');
   const [deletingClassId, setDeletingClassId] = useState(null);
+  const [assigningClassId, setAssigningClassId] = useState(null);
+  const [assignError, setAssignError] = useState('');
 
   // Fetch all subjects to populate the dropdown for linking
   useEffect(() => {
@@ -52,6 +54,25 @@ function ClassList({ db, userId, APP_ID }) {
     });
     return () => unsubscribe();
   }, [db, userId, APP_ID]);
+
+  // Backfill: ensure subjectName is present on existing classes for student display
+  useEffect(() => {
+    if (!db || !userId || !APP_ID) return;
+    if (!Array.isArray(classes) || classes.length === 0) return;
+    if (!Array.isArray(availableSubjects) || availableSubjects.length === 0) return;
+
+    const subjectNameMap = new Map(availableSubjects.map(s => [s.id, s.name]));
+    const toBackfill = classes.filter(c => !c.subjectName && c.linkedSubjectId && subjectNameMap.has(c.linkedSubjectId));
+
+    toBackfill.forEach(async (cls) => {
+      try {
+        const classDocRef = doc(db, `artifacts/${APP_ID}/users/${userId}/classes`, cls.id);
+        await updateDoc(classDocRef, { subjectName: subjectNameMap.get(cls.linkedSubjectId) });
+      } catch (e) {
+        console.error('Backfill subjectName failed for class', cls.id, e);
+      }
+    });
+  }, [db, userId, APP_ID, classes, availableSubjects]);
 
   // Function to generate a simple unique alphanumeric code
   const generateUniqueCode = () => {
@@ -97,6 +118,7 @@ function ClassList({ db, userId, APP_ID }) {
         name: newClassName.trim(),
         uniqueCode: uniqueCode,
         linkedSubjectId: selectedSubjectId,
+  subjectName: (availableSubjects.find(s => s.id === selectedSubjectId)?.name) || 'N/A',
         teacherId: userId,
         students: [], // Initially empty array of student UIDs
         isJoinable: true, // New field: class is joinable by default
@@ -131,7 +153,8 @@ function ClassList({ db, userId, APP_ID }) {
       const classDocRef = doc(db, `artifacts/${APP_ID}/users/${userId}/classes`, classId);
       await updateDoc(classDocRef, {
         name: editedClassName.trim(),
-        linkedSubjectId: editedLinkedSubjectId,
+  linkedSubjectId: editedLinkedSubjectId,
+  subjectName: (availableSubjects.find(s => s.id === editedLinkedSubjectId)?.name) || 'N/A',
       });
       setEditingClassId(null);
       setEditedClassName('');
@@ -165,6 +188,46 @@ function ClassList({ db, userId, APP_ID }) {
       });
     } catch (e) {
       console.error("Error toggling joinable status:", e);
+    }
+  };
+
+  // Create an assignment request for this class to trigger backend test generation
+  const handleAssignTest = async (cls) => {
+    if (!db || !APP_ID || !userId) return;
+    if (!cls?.linkedSubjectId) {
+      setAssignError('This class has no linked subject.');
+      return;
+    }
+    try {
+      setAssignError('');
+      setAssigningClassId(cls.id);
+      // Preflight: ensure there are questions for this subject
+      const qsSnap = await getDocs(
+        query(
+          collection(db, `artifacts/${APP_ID}/users/${userId}/questions`),
+          where('subjectId', '==', cls.linkedSubjectId)
+        )
+      );
+      if (qsSnap.empty) {
+        setAssignError('No questions found for the linked subject. Please add questions first.');
+        return;
+      }
+      await addDoc(collection(db, 'assignmentRequests'), {
+        teacherId: userId,
+        appId: APP_ID,
+        subjectId: cls.linkedSubjectId,
+        classId: cls.id,
+        className: cls.name,
+        createdAt: new Date(),
+      });
+      // Lightweight UX feedback
+      // eslint-disable-next-line no-alert
+      alert(`Test assignment requested for "${cls.name}". It will generate shortly.`);
+    } catch (e) {
+      console.error('Error creating assignment request:', e);
+      setAssignError('Failed to request assignment. Try again.');
+    } finally {
+      setAssigningClassId(null);
     }
   };
 
@@ -308,14 +371,24 @@ function ClassList({ db, userId, APP_ID }) {
                     >
                       {cls.isJoinable ? 'Stop Joining' : 'Allow Joining'}
                     </button>
-                    <button className="px-3 py-1 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 transition-colors duration-200 mt-2 sm:mt-0">
-                      Assign Test
+                    <button
+                      onClick={() => handleAssignTest(cls)}
+                      disabled={assigningClassId === cls.id}
+                      className={`px-3 py-1 rounded-md text-sm mt-2 sm:mt-0 text-white ${assigningClassId === cls.id ? 'bg-blue-300' : 'bg-blue-600 hover:bg-blue-700'} transition-colors duration-200`}
+                    >
+                      {assigningClassId === cls.id ? 'Assigning…' : 'Assign Test'}
                     </button>
                   </div>
                 </div>
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {assignError && (
+        <div className="mt-6 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+          {assignError}
         </div>
       )}
 

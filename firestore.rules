@@ -35,7 +35,16 @@ service cloud.firestore {
 
     match /artifacts/{appId}/users/{teacherId}/classes/{classId} {
       // Teachers can manage their own classes fully
-      allow read, create, update, delete: if isSignedIn() && request.auth.uid == teacherId;
+      allow create, update, delete: if isSignedIn() && request.auth.uid == teacherId;
+      // Reads allowed for:
+      // - the teacher (owner)
+      // - enrolled students (their UID is in students)
+      // - public discovery for joinable classes (to support code search UI)
+      allow get, list: if isSignedIn() && (
+        request.auth.uid == teacherId ||
+        (resource.data.students != null && request.auth.uid in resource.data.students) ||
+        resource.data.isJoinable == true
+      );
     }
 
     match /artifacts/{appId}/users/{teacherId}/questions/{questionId} {
@@ -55,9 +64,19 @@ service cloud.firestore {
     }
 
     match /testAssignments/{assignmentId} {
-      // Only allow teacher to read their own assignments; writes via backend only
-      allow read: if isSignedIn() && request.auth.uid == resource.data.teacherId;
-      allow write: if false;
+      // Teachers can read their assignments; students can read their own
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.teacherId ||
+        request.auth.uid == resource.data.studentUid
+      );
+      // Students can submit answers exactly once: Assigned -> Submitted
+      allow update: if isSignedIn() &&
+        request.auth.uid == resource.data.studentUid &&
+        resource.data.status == 'Assigned' &&
+        request.resource.data.status == 'Submitted' &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['submittedAnswers', 'status']) &&
+        request.resource.data.submittedAnswers.size() == resource.data.questions.size();
+      allow create, delete: if false;
     }
   }
 }

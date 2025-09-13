@@ -1,10 +1,10 @@
 // src/Teacher/DynamicQuestionForm.js
 
 import React, { useState, useEffect, useRef } from 'react';
-import { collection, addDoc } from 'firebase/firestore'; // Removed query, where, getDocs
+import { collection, addDoc, doc, updateDoc } from 'firebase/firestore'; // add update for edit mode
 import { insertTextAtCursor } from '../utils/helpers'; // Import insertTextAtCursor
 
-function DynamicQuestionForm({ db, userId, subjectId, onQuestionAdded, APP_ID }) {
+function DynamicQuestionForm({ db, userId, subjectId, onQuestionAdded, onQuestionUpdated, onCancel, APP_ID, editQuestion = null }) {
   const [questionText, setQuestionText] = useState('');
   const [variables, setVariables] = useState([]); // [{id: 'uuid', name: 'var_1', values: ['10', '20']}]
   const [formula, setFormula] = useState('');
@@ -20,6 +20,33 @@ function DynamicQuestionForm({ db, userId, subjectId, onQuestionAdded, APP_ID })
   const mathOperators = ['+', '-', '*', '/', '^', '(', ')', '!'];
   const mathFunctions = ['sin()', 'cos()', 'tan()', 'cosec()', 'sec()', 'cot()'];
 
+  // Symbols and unicode super/subscripts for questionText (display only)
+  const symbolButtons = ['√', 'π', 'θ', '°', '≈', '≤', '≥', '≠', '×', '÷'];
+  const superscriptDigits = ['⁰','¹','²','³','⁴','⁵','⁶','⁷','⁸','⁹'];
+  const subscriptDigits = ['₀','₁','₂','₃','₄','₅','₆','₇','₈','₉'];
+
+  // Seed state in edit mode
+  useEffect(() => {
+    if (editQuestion) {
+      setQuestionText(editQuestion.questionText || '');
+      // Attach temporary ids for controlled list rendering
+      const seededVars = Array.isArray(editQuestion.variables) ? editQuestion.variables.map((v) => ({
+        id: crypto.randomUUID(),
+        name: v.name,
+        values: Array.isArray(v.values) ? v.values.slice() : [''],
+      })) : [];
+      setVariables(seededVars);
+      setFormula(editQuestion.formula || '');
+      // compute next var index based on names present
+      let maxVarIndex = 0;
+      seededVars.forEach(v => {
+        const num = parseInt(String(v.name).split('_')[1]);
+        if (!isNaN(num) && num > maxVarIndex) maxVarIndex = num;
+      });
+      nextVarIndex.current = maxVarIndex + 1;
+    }
+  }, [editQuestion]);
+
   // Effect to parse variables from questionText
   useEffect(() => {
     const regex = /\{\{(var_\d+)\}\}/g; // Matches {{var_1}}, {{var_2}}, etc.
@@ -30,32 +57,25 @@ function DynamicQuestionForm({ db, userId, subjectId, onQuestionAdded, APP_ID })
     }
 
     setVariables(prevVars => {
-      const newVariables = [];
-      const usedVarNames = new Set();
+      // Start with existing variables to preserve their values
+      const newVariables = [...prevVars];
+      const existingNames = new Set(prevVars.map(v => v.name));
 
-      // Preserve existing variables and their values if they are still in the questionText
-      prevVars.forEach(prevVar => {
-        if (extractedVarNames.has(prevVar.name)) {
-          newVariables.push(prevVar);
-          usedVarNames.add(prevVar.name);
-        }
-      });
-
-      // Add new variables found in questionText that weren't previously in state
+      // Add any new placeholders that don't already exist
       Array.from(extractedVarNames).sort((a, b) => {
         const numA = parseInt(a.split('_')[1]);
         const numB = parseInt(b.split('_')[1]);
         return numA - numB;
       }).forEach(varName => {
-        if (!usedVarNames.has(varName)) {
+        if (!existingNames.has(varName)) {
           newVariables.push({ id: crypto.randomUUID(), name: varName, values: [''] });
         }
       });
 
-      // Update nextVarIndex based on current variables
+      // Update nextVarIndex based on all variables
       let maxVarIndex = 0;
       newVariables.forEach(v => {
-        const num = parseInt(v.name.split('_')[1]);
+        const num = parseInt(String(v.name).split('_')[1]);
         if (!isNaN(num) && num > maxVarIndex) {
           maxVarIndex = num;
         }
@@ -121,8 +141,8 @@ function DynamicQuestionForm({ db, userId, subjectId, onQuestionAdded, APP_ID })
     // For a more complex scenario, we might need to actively remove the {{var_X}} from questionText here.
   };
 
-  // Handle adding a new dynamic question
-  const handleAddQuestion = async (e) => {
+  // Handle add or update
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setErrorMessage('');
 
@@ -135,10 +155,7 @@ function DynamicQuestionForm({ db, userId, subjectId, onQuestionAdded, APP_ID })
       return;
     }
 
-    if (variables.length === 0) {
-      setErrorMessage("Please add at least one variable to the question.");
-      return;
-    }
+  // Variables are optional for some questions (e.g., pure symbolic trig). Allow empty.
 
     // Validate variables have at least one non-empty value
     const hasInvalidVariable = variables.some(v => v.values.filter(val => val.trim() !== '').length === 0);
@@ -149,26 +166,35 @@ function DynamicQuestionForm({ db, userId, subjectId, onQuestionAdded, APP_ID })
 
     setIsAddingQuestion(true);
     try {
-      const questionsCollectionRef = collection(db, `artifacts/${APP_ID}/users/${userId}/questions`);
-
-      // Prepare variables for saving: filter out empty value inputs
       const variablesToSave = variables.map(v => ({
         name: v.name,
-        values: v.values.filter(val => val.trim() !== '') // Only save non-empty values
+        values: v.values.filter(val => val.trim() !== ''),
       }));
 
-      await addDoc(questionsCollectionRef, {
-        subjectId: subjectId,
-        questionText: questionText.trim(),
-        variables: variablesToSave,
-        formula: formula.trim(),
-        createdAt: new Date(),
-      });
-      setQuestionText('');
-      setVariables([]);
-      setFormula('');
-      nextVarIndex.current = 1; // Reset variable index for next question
-      onQuestionAdded(); // Notify parent to hide form
+      if (editQuestion && editQuestion.id) {
+        const qRef = doc(db, `artifacts/${APP_ID}/users/${userId}/questions/${editQuestion.id}`);
+        await updateDoc(qRef, {
+          questionText: questionText.trim(),
+          variables: variablesToSave,
+          formula: formula.trim(),
+          updatedAt: new Date(),
+        });
+        if (onQuestionUpdated) onQuestionUpdated();
+      } else {
+        const questionsCollectionRef = collection(db, `artifacts/${APP_ID}/users/${userId}/questions`);
+        await addDoc(questionsCollectionRef, {
+          subjectId: subjectId,
+          questionText: questionText.trim(),
+          variables: variablesToSave,
+          formula: formula.trim(),
+          createdAt: new Date(),
+        });
+        setQuestionText('');
+        setVariables([]);
+        setFormula('');
+        nextVarIndex.current = 1; // Reset variable index for next question
+        if (onQuestionAdded) onQuestionAdded();
+      }
     } catch (e) {
       console.error("Error adding question:", e);
       setErrorMessage("Failed to add question. Please try again.");
@@ -186,7 +212,7 @@ function DynamicQuestionForm({ db, userId, subjectId, onQuestionAdded, APP_ID })
           <span className="block sm:inline"> {errorMessage}</span>
         </div>
       )}
-      <form onSubmit={handleAddQuestion}>
+  <form onSubmit={handleSubmit}>
         {/* Question Text Area with "Add Variable" button */}
         <div className="mb-4">
           <label htmlFor="questionText" className="block text-sm font-medium text-gray-700 mb-1">
@@ -210,11 +236,50 @@ function DynamicQuestionForm({ db, userId, subjectId, onQuestionAdded, APP_ID })
             ref={questionTextRef}
             value={questionText}
             onChange={(e) => setQuestionText(e.target.value)}
-            placeholder="e.g., A car is running at {{var_1}} km/hr for {{var_2}} hours. Then how much distance it will cover?"
+            placeholder="e.g., sin²(30) + cos²(30) = ?   or   Find √{{var_1}}"
             rows="3"
             className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
             required
           ></textarea>
+          {/* Formatting & Symbols toolbar for question text */}
+          <div className="mt-3 p-3 bg-gray-50 rounded-md border border-gray-200">
+            <p className="text-xs font-semibold text-gray-700 mb-2">Formatting & Symbols (display only):</p>
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              <span className="text-xs text-gray-600 mr-1">Superscript:</span>
+              {superscriptDigits.map((s, i) => (
+                <button
+                  key={`sup-${i}`}
+                  type="button"
+                  onClick={() => insertTextAtCursor(questionTextRef, s, setQuestionText)}
+                  className="px-2 py-0.5 bg-white border rounded hover:bg-gray-100 text-sm"
+                  title={`Insert superscript ${i}`}
+                >{s}</button>
+              ))}
+              <span className="ml-3 text-xs text-gray-600">Subscript:</span>
+              {subscriptDigits.map((s, i) => (
+                <button
+                  key={`sub-${i}`}
+                  type="button"
+                  onClick={() => insertTextAtCursor(questionTextRef, s, setQuestionText)}
+                  className="px-2 py-0.5 bg-white border rounded hover:bg-gray-100 text-sm"
+                  title={`Insert subscript ${i}`}
+                >{s}</button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <span className="text-xs text-gray-600 mr-1">Symbols:</span>
+              {symbolButtons.map((sym, idx) => (
+                <button
+                  key={`sym-${idx}`}
+                  type="button"
+                  onClick={() => insertTextAtCursor(questionTextRef, sym, setQuestionText)}
+                  className="px-2 py-0.5 bg-white border rounded hover:bg-gray-100 text-sm"
+                  title={`Insert ${sym}`}
+                >{sym}</button>
+              ))}
+            </div>
+            <p className="text-[11px] text-gray-500 mt-2">Note: These symbols affect only the visible question text, not the formula calculation.</p>
+          </div>
         </div>
 
         {/* Dynamic Value Inputs for Variables */}
@@ -337,13 +402,24 @@ function DynamicQuestionForm({ db, userId, subjectId, onQuestionAdded, APP_ID })
           </div>
         </div>
 
-        <button
-          type="submit"
-          className="w-full px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
-          disabled={isAddingQuestion}
-        >
-          {isAddingQuestion ? 'Adding Question...' : 'Add Question to Bank'}
-        </button>
+        <div className="flex gap-3">
+          <button
+            type="submit"
+            className="flex-1 px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+            disabled={isAddingQuestion}
+          >
+            {isAddingQuestion ? (editQuestion ? 'Updating…' : 'Adding…') : (editQuestion ? 'Update Question' : 'Add Question to Bank')}
+          </button>
+          {editQuestion && (
+            <button
+              type="button"
+              onClick={() => onCancel && onCancel()}
+              className="px-6 py-3 border border-gray-300 text-base font-medium rounded-md shadow-sm bg-white hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </form>
     </div>
   );

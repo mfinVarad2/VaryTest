@@ -9,6 +9,7 @@ function QuestionBank({ db, userId, subject, onBack, APP_ID }) {
   const [allQuestions, setAllQuestions] = useState([]); // Stores all questions for the subject
   const [showAddQuestionForm, setShowAddQuestionForm] = useState(false);
   const [showAllQuestions, setShowAllQuestions] = useState(false); // State to toggle between recent and all
+  const [editing, setEditing] = useState(null); // question object when editing
 
   // Fetch all questions for the selected subject initially and sort client-side
   useEffect(() => {
@@ -63,7 +64,7 @@ function QuestionBank({ db, userId, subject, onBack, APP_ID }) {
         {showAddQuestionForm ? 'Hide Form' : 'Add New Dynamic Question'}
       </button>
 
-      {showAddQuestionForm && (
+      {showAddQuestionForm && !editing && (
         <DynamicQuestionForm
           db={db}
           userId={userId}
@@ -71,6 +72,27 @@ function QuestionBank({ db, userId, subject, onBack, APP_ID }) {
           APP_ID={APP_ID}
           onQuestionAdded={() => setShowAddQuestionForm(false)}
         />
+      )}
+
+      {editing && (
+        <div className="mb-8">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-xl font-semibold text-indigo-700">Edit Question</h3>
+            <button
+              className="text-sm text-gray-600 hover:text-gray-800"
+              onClick={() => setEditing(null)}
+            >Close</button>
+          </div>
+          <DynamicQuestionForm
+            db={db}
+            userId={userId}
+            subjectId={subject.id}
+            APP_ID={APP_ID}
+            editQuestion={editing}
+            onQuestionUpdated={() => setEditing(null)}
+            onCancel={() => setEditing(null)}
+          />
+        </div>
       )}
 
       <h3 className="text-2xl font-bold text-indigo-600 mt-10 mb-6">
@@ -97,6 +119,7 @@ function QuestionBank({ db, userId, subject, onBack, APP_ID }) {
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Added On
                   </th>
+                  <th scope="col" className="px-6 py-3"/>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -117,6 +140,12 @@ function QuestionBank({ db, userId, subject, onBack, APP_ID }) {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {question.createdAt?.toDate().toLocaleDateString() || 'N/A'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+                      <button
+                        onClick={() => setEditing(question)}
+                        className="px-3 py-1 bg-white border rounded hover:bg-gray-50"
+                      >Edit</button>
                     </td>
                   </tr>
                 ))}
